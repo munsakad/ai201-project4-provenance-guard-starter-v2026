@@ -1,331 +1,162 @@
 # Provenance Guard
 
-> ### 👋 Start here
->
-> **New to this repo? Read [RUNNING.md](RUNNING.md) first.**
->
-> Once `python test.py` passes, in one terminal:
->
-> ```bash
-> python app.py
-> ```
->
-> and in another:
->
-> ```bash
-> curl -X POST http://127.0.0.1:5000/ping \
->   -H "Content-Type: application/json" \
->   -d '{"message": "hello"}'
-> ```
->
-> That's a web service. Something sent it text and it sent something back.
-> Everything this unit is filling in the middle.
->
-> **The rest of this file is your submission.** Fill it in as you go.
-
----
-
-<!-- ─────────────────────────────────────────────────────────────────────────
-     Unit 7 asks for the first five sections. Unit 8 adds the five below.
-
-     Everything is pasted as TEXT. A pasted curl response gets full credit;
-     a picture of your terminal gets none.
-     ───────────────────────────────────────────────────────────────────────── -->
-
-<!-- ═══════════════════════ UNIT 7 — THE BUILD ═══════════════════════ -->
-
 ## What This Does
 
-<!-- The path a submission takes, from arriving to the label a reader sees.
-     Six or seven steps — this is the trace you wrote in Milestone 1. -->
+1. A writing site sends JSON with `text` and `creator_id` to `POST /submit`.
+2. The route validates types, nonblank fields, and size limits.
+3. The local GPT-2 model scores how predictable the text is.
+4. Stylometry measures sentence variation, vocabulary repetition, and punctuation.
+5. The combining rule produces a heuristic AI-likelihood index from 0 to 1.
+6. The label mapping supplies a plain-English label; the route assigns a UUID and logs the decision before returning it.
+7. A writer can send `content_id` and `reasoning` to `POST /appeal`. The log preserves the decision and appends an `under_review` event. Review is manual; this service does not perform that review.
 
+Run on Windows PowerShell:
 
+```powershell
+.\.venv\Scripts\Activate.ps1
+python app.py
+```
 
----
+Setup instructions: [RUNNING.md](RUNNING.md). No API key is used. First-time model loading downloads approximately 550 MB. `python test.py` checks the environment; `python -m unittest test_service -v` checks the contract; `python collect_evidence.py` makes real HTTP requests and appends demonstration events to the audit log. `/ping` is unchanged.
+
+`POST /submit` requires nonblank string fields, text up to 20,000 characters and creator IDs up to 200. Success is HTTP 200 with `content_id`, `guess`, `confidence`, `label`, `model_score`, `style_score`, and `status`. Bad input returns JSON 400, oversized text 413, and an unavailable model 503. Text too short for the tokenizer returns 400.
+
+`POST /appeal` requires a known `content_id` and nonblank `reasoning` up to 5,000 characters. Success is HTTP 200 with `content_id`, `status`, and a confirmation message; an unknown ID returns JSON 404. Status is derived from the latest event for an ID. `GET /log` exposes the append-only history. Repeated appeals are recorded individually.
+
+This is a local educational service: creator IDs are asserted, not authenticated, and appeals are not access-controlled. Do not expose its audit log or debugger publicly. No stretch features are included.
 
 ## Signals and Scoring
 
-<!-- For each signal: what property it measures, why that might differ between
-     human and AI writing, and WHAT IT CAN'T SEE.
+The rule was recorded in [PLAN.md](PLAN.md) before implementation. Acceptance targets are in [criteria.md](criteria.md); those are future evaluation targets, not achieved accuracy claims.
 
-     The blind spot is not optional. If you can't name it you don't understand
-     the signal yet — and unit 8's attack set is built out of blind spots. -->
+**Model signal ? `detector.py::model_signal`:** GPT-2 computes perplexity on the first 400 tokens. The score is `1 / (1 + (perplexity / 45) ** 1.6)`. Predictable text scores higher. Generated prose can favor predictable wording, but ordinary human writing does too. This is a contextual language-model signal, not semantic verification of truth or authorship. It cannot verify who wrote anything; unfamiliar AI prose can evade it, and familiar human prose can be falsely flagged. The starter detector is unchanged.
 
-### Signal one — the model signal
+**Style signal ? `stylometry.py::style_signal`:** Sentence-length spread is population standard deviation divided by mean word count; vocabulary variety is unique words divided by total words; punctuation density counts Unicode punctuation characters divided by all characters. Words use lowercase Unicode tokenization. The style score is `0.5*(1-min(spread,1)) + 0.3*(1-variety) + 0.2*(1-min(density/0.10,1))`. Fewer than three sentences or twenty words yields neutral 0.5. Regular sentence lengths, repetition, and sparse punctuation raise this heuristic index. These tendencies are hypotheses, not universal traits. The signal cannot read meaning: typos, punctuation edits, quotations, language, and text length can move it without changing authorship.
 
-**What it measures:**
-
-**Why that might differ between human and AI writing:**
-
-**What it can't see:**
-
-### Signal two — the style signal
-
-**What it measures:**
-
-**Why that might differ between human and AI writing:**
-
-**What it can't see:**
-
-### The combining rule
-
-<!-- Write the rule in words, then give the numbers. What happens when the two
-     signals disagree? -->
-
-**The rule:**
-
-**The numbers:**
-
-**Where it lives:** `scoring.py::combine_signals`
-
-<!-- ⚠️ The grader checks your code against that line. If your rule lives
-     somewhere else, say where. -->
-
-**A case where my two signals split, and what my rule does with it:**
-
-
-
----
+**Combining rule ? `scoring.py::combine_signals`:** `0.7*model_score + 0.3*style_score`, rounded to four decimals. If the inputs differ by at least 0.5, clamp the result into [0.35, 0.65]. Strong disagreement therefore becomes unsure. Weights and thresholds live in `config.py`. Model weighting reflects its richer contextual information; a broad unsure band reduces confident accusations. The returned `confidence` is the combined AI-likelihood index, not confidence in the winning guess and not a calibrated probability. For example, model 0.9 and style 0.1 produce 0.65, unsure. This is an illustrative calculation, not an observed sample.
 
 ## Label Variants
 
-<!-- The exact text of all three labels, as a reader would see them, and the
-     score range each covers.
-
-     Write them for someone who has never heard the word "threshold". -->
-
-| Label | Score range | The exact text a reader sees |
+| Variant | Inclusive/exclusive range | Exact reader-facing text |
 |---|---|---|
-| high-confidence human |  |  |
-| unsure |  |  |
-| high-confidence AI |  |  |
+| high-confidence human | 0 <= score <= 0.20 | This writing appears likely to have been written by a person. This assessment can be wrong. |
+| unsure | 0.20 < score < 0.80 | We cannot reliably tell how this writing was created. This is not an accusation; the writer can request a review. |
+| high-confidence AI | 0.80 <= score <= 1 | This writing appears likely to have been generated by AI. This assessment can be wrong; the writer can request a review. |
 
-**Why I worded the "unsure" one this way:**
-<!-- It's the hardest of the three. It has to admit uncertainty without
-     sounding like an accusation, because the person reading it may well have
-     written every word themselves. -->
-
-
-
----
+The unsure label avoids implying wrongdoing and gives the writer a next step. The AI label acknowledges that it can be wrong. Every reachable score maps to one label; 0.51 is unsure and 0.95 is AI. Mathematical coverage and observed text reachability are checked separately.
 
 ## Sample Run
 
-<!-- One submission and one appeal, pasted as text: the request, the response,
-     and the log entries. -->
+The following are captured local HTTP responses from `collect_evidence.py`. Submissions used `curl.exe`; the appeal and log read used Python requests against the same server. The script selects a free loopback port; these replay commands use the normal service port 5000. Request files contain the exact captured JSON. Demo appeals are fixtures, not statements that the student authored the generated sample.
 
-**A submission**
+**Submission request:**
 
-<!-- The response needs content_id, guess, confidence, label, AND both
-     signal scores - model_score and style_score. Unit 8's tools read those
-     two off the response, so leaving them out costs you next unit's
-     diagnostics. -->
-
-```bash
-$ curl -X POST http://127.0.0.1:5000/submit \
-  -H "Content-Type: application/json" \
-  -d '{"text": "...", "creator_id": "..."}'
+```powershell
+curl.exe -X POST http://127.0.0.1:5000/submit -H "Content-Type: application/json" --data-binary "@results/submit_request.json"
 ```
 
 ```json
-
+{
+  "text": "The implementation of an effective framework requires careful consideration of several key factors. First, organizations should establish clear objectives and define measurable outcomes. Furthermore, consistent communication helps stakeholders understand their responsibilities and work toward shared goals. By adopting a structured approach, teams can improve efficiency and achieve sustainable results. In conclusion, a comprehensive strategy provides a strong foundation for future success.",
+  "creator_id": "demo-writer"
+}
 ```
 
-**An appeal**
+**Submission response ? HTTP 200:**
 
-```bash
-$ curl -X POST http://127.0.0.1:5000/appeal \
-  -H "Content-Type: application/json" \
-  -d '{"content_id": "...", "reasoning": "..."}'
+```json
+{
+  "confidence": 0.6878,
+  "content_id": "c341b73b-2766-47bf-a47a-27c466a355a0",
+  "guess": "unsure",
+  "label": "We cannot reliably tell how this writing was created. This is not an accusation; the writer can request a review.",
+  "model_score": 0.7081,
+  "status": "decided",
+  "style_score": 0.6403
+}
+```
+
+**Appeal request:**
+
+```powershell
+curl.exe -X POST http://127.0.0.1:5000/appeal -H "Content-Type: application/json" --data-binary "@results/appeal_request.json"
 ```
 
 ```json
-
+{
+  "content_id": "c341b73b-2766-47bf-a47a-27c466a355a0",
+  "reasoning": "I dispute this automated assessment and request a human review."
+}
 ```
 
-**What the log shows afterwards**
+When replaying, replace the content ID with the ID returned by the new submission.
 
-```bash
-$ curl "http://127.0.0.1:5000/log?limit=3"
-```
+**Appeal response ? HTTP 200:**
 
 ```json
-
+{
+  "content_id": "c341b73b-2766-47bf-a47a-27c466a355a0",
+  "message": "Your appeal was recorded. This submission is now under review.",
+  "status": "under_review"
+}
 ```
 
----
+**Audit log:**
+
+```powershell
+curl.exe "http://127.0.0.1:5000/log?limit=2"
+```
+
+These are the original decision and appended appeal for the captured ID, extracted from the actual `GET /log` response. Other calibration submissions occur between them in the complete history; a live `limit=2` returns only the last two events, not necessarily both entries for this ID. The full response is in `results/sample_run.json`.
+
+```json
+{
+  "count": 2,
+  "entries": [
+    {
+      "combined_score": 0.6878,
+      "content_id": "c341b73b-2766-47bf-a47a-27c466a355a0",
+      "creator_id": "demo-writer",
+      "guess": "unsure",
+      "label": "We cannot reliably tell how this writing was created. This is not an accusation; the writer can request a review.",
+      "model_score": 0.7081,
+      "status": "decided",
+      "style_score": 0.6403,
+      "timestamp": "2026-10-31T20:32:44+00:00"
+    },
+    {
+      "content_id": "c341b73b-2766-47bf-a47a-27c466a355a0",
+      "creator_id": "demo-writer",
+      "event": "appeal",
+      "reasoning": "I dispute this automated assessment and request a human review.",
+      "status": "under_review",
+      "timestamp": "2026-10-31T20:32:45+00:00"
+    }
+  ]
+}
+```
+
+**Calibration observations (one run, not an accuracy evaluation):**
+
+| Input | Model | Style | Combined | Guess |
+|---|---:|---:|---:|---|
+| AI-generated expository prose | 0.7081 | 0.6403 | 0.6878 | unsure |
+| Human literary excerpt | 0.6453 | 0.5000 | 0.6017 | unsure |
+| Formal human excerpt | 0.6629 | 0.5000 | 0.6140 | unsure |
+| Lightly edited AI prose | 0.4336 | 0.4738 | 0.4457 | unsure |
+| Repetitive AI fixture | 0.9917 | 0.9185 | 0.9697 | ai |
+| Irregular synthetic fixture | 0.1258 | 0.1153 | 0.1226 | human |
+| Signal disagreement fixture | 0.1292 | 0.6695 | 0.3500 | unsure |
+
+The disagreement fixture produces model 0.1292 and style 0.6695: the difference 0.5403 triggers the uncertainty guard, lifting the raw weighted average 0.2913 to 0.3500 (unsure). All three labels were observed through real submissions. The human label was reached by a generated nonsense fixture: that demonstrates reachability and a detector failure, not human-authorship accuracy. Both historical human excerpts were unsure. The unedited AI sample scored 0.6878, and its lightly edited version scored 0.4457, showing sensitivity to wording.
+
+Human examples are public-domain excerpts from [Lewis Carroll's Alice in Wonderland](https://www.gutenberg.org/files/928/928-h/928-h.htm) and the 1776 Declaration of Independence; exact text and provenance are in `samples.json`. These familiar passages may be in GPT-2's training data and are not an independent test set. No claim is made that the false-positive or score-spread criteria have been met.
+
+**Verification:** All seven `test_service.py` tests passed. They substitute detector outputs to check the endpoint contract, input boundaries, scoring labels, and appeal audit history. Separately, the real-model HTTP runs returned 200 for seven submissions and the appeal, exposed `detector_loaded: true`, and recorded all events in `logs/audit.jsonl`. The starter environment check reported 9 passed and 0 failed. The first model-loading attempt logged network retries before succeeding; the final run used the downloaded cache offline.
+
 
 ## How I Used AI
 
-**Moment 1**
+**Moment 1:** I asked Codex to complete the project from the pasted assignment. It inspected the starter and produced a pipeline contract, a 70/30 scoring plan, input validation, two-signal scoring, and an appeal route. Codex applied these changes; I have not independently revised or verified them in this session.
 
-- *What I asked for:*
-- *What came back:*
-- *What I changed:*
-
-**Moment 2**
-
-- *What I asked for:*
-- *What came back:*
-- *What I changed:*
-
-<!-- ═══════════════════════ UNIT 8 — THE TEST ═══════════════════════ -->
-
----
-
-## Rate Limiting
-
-**My limits:** ___ per minute, ___ per day
-
-**Why those numbers and not others:**
-<!-- Think about two people: a real writer submitting their own work a few
-     times an hour, and a script sending a thousand variations to map your
-     thresholds. Your numbers have to be liveable for the first and hostile to
-     the second. -->
-
-**What a caller counts as:** <!-- per address, or per creator_id? They fail
-differently — one script can look like a thousand callers, and one household
-can look like one. -->
-
-**The run of status codes when I pushed past it:**
-
-<!-- python run_attacks.py --flood 15 -->
-
-```
-
-```
-
----
-
-## Attack Run — Before
-
-<!-- Every attack with its outcome and a held-or-broke mark.
-     `run_attacks.py --label before` produces the table. -->
-
-
-
-**Ten audit log entries from the run**
-
-<!-- Choose entries that show the interesting failures, not the ten easiest. -->
-
-```json
-
-```
-
-**The single worst outcome** — the one I'd least want to explain to a writer
-whose work got caught by it:
-
-
-
----
-
-## Run Log and Verdicts
-
-<!-- Your five criteria across three trials. `run_eval.py --label before`. -->
-
-| Criterion | Target | Run 1 | Run 2 | Run 3 | Verdict |
-|---|---|---|---|---|---|
-| 1.  |  |  |  |  |  |
-| 2.  |  |  |  |  |  |
-| 3.  |  |  |  |  |  |
-| 4.  |  |  |  |  |  |
-| 5.  |  |  |  |  |  |
-
-**Real output from one trial**, pasted as text, naming the file and function
-that produced it:
-
-```json
-
-```
-
-**Diagnoses**
-
-<!-- For each miss AND each broken attack: the stage and the mechanism.
-
-     Your service has five stages: the route, signal one, signal two, the
-     combining rule, and the label mapping.
-
-     Not a diagnosis:  "The evasion attacks got through."
-     A diagnosis:      "Four evasion inputs got through. All four had typos
-                        added to AI-generated text. My second signal measures
-                        word variety, and typos raise word variety — so it read
-                        them as more human. My combining rule weights that
-                        signal at 0.6, so it dragged the whole score down."
-
-     Look for a pattern. Five failures on one signal is one problem, not five. -->
-
-
-
----
-
-## The Improvement
-
-**What I changed:**
-
-**Which diagnosis pointed at it:**
-
-### Attack Run — After
-
-<!-- Same format. `run_attacks.py --label after` -->
-
-
-
-**Did it help, and how do I know:**
-
-<!-- Widening the unsure band usually fixes one problem and creates another.
-     Reporting that trade honestly is worth full credit. -->
-
-
-
----
-
-## What's Still Broken
-
-<!-- For each attack still getting through and each criterion still missed:
-     what you'd do, and why you stopped. -->
-
-
-
-**The trade I'd make if this ran for real:**
-
-<!-- Two sentences. Fewer wrong accusations means more AI text getting through.
-     Say which way you'd go and WHO PAYS FOR IT. -->
-
-
-
-<!-- ═════════════════════════════════════════════════════════════════════
-
-     SUBMISSION CHECKLIST — unit 7
-
-       [ ] criteria.md has five numbered criteria, each naming a target
-       [ ] Each has a reason underneath
-       [ ] POST /submit returns content_id, guess, confidence, label,
-           model_score and style_score
-       [ ] Two signals that measure DIFFERENT things, each with a named blind spot
-       [ ] Three label variants, all reachable, written out in full
-       [ ] POST /appeal changes status and writes to the log
-       [ ] Signals and Scoring names scoring.py::combine_signals
-       [ ] Sample Run: a submission AND an appeal, as pasted text
-       [ ] At least four new commits
-       [ ] Repository URL submitted — WRITE IT DOWN
-
-     SUBMISSION CHECKLIST — unit 8
-
-       [ ] Rate limiting on /submit, with your numbers justified
-       [ ] The pasted run of status codes showing 429
-       [ ] Audit log with all nine fields, recording rejections too
-       [ ] The attack set run IN FULL, every input with an outcome
-       [ ] Ten audit log entries pasted as text
-       [ ] Five criteria across three trials
-       [ ] A diagnosis for every miss and every broken attack — stage AND mechanism
-       [ ] One improvement, with Attack Run — After
-       [ ] What's Still Broken, including the production trade
-       [ ] At least four new commits
-       [ ] The SAME repository URL as last unit
-
-     Do not delete and recreate this repository.
-     ═════════════════════════════════════════════════════════════════════ -->
-
----
-
-📖 **How to run this project: [RUNNING.md](RUNNING.md)**
+**Moment 2:** Codex asked me to supply my own five acceptance criteria because the assignment explicitly requests that. I replied, "write them." It drafted five measurable targets and reasons and committed them before scoring results. These criteria were AI-authored, which differs from the assignment's instruction. I need to review and defend them myself. Codex also wrote verification checks and attributed demo fixtures; generated fixtures are not claimed as my writing.
