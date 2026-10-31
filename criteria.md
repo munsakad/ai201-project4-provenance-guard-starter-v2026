@@ -1,134 +1,18 @@
-# Acceptance criteria — Provenance Guard
+﻿# Acceptance criteria
 
-Five criteria that say what "working" means for this service, written in unit 7
-**before** you built it.
+Drafted by AI at the student's explicit request before any scoring results. The student must review and defend these targets; the assignment asks for student-authored criteria.
 
-**All five are yours.** None are given.
+1. **False positives:** In each of three trials of the same 20 independently human-written English samples (50-300 words, including at least five formal samples), at most one receives `guess: ai`.
+   **Why:** A false accusation can damage a writer's reputation. A 5% ceiling is a demanding initial target, not an accuracy claim.
 
-An acceptance criterion names a number or something plainly observable. *"The
-detector is accurate"* is an opinion — and perfect AI detection isn't possible
-anyway, so it's an opinion about something nobody can deliver. *"Of 10 pieces I
-wrote myself, at most 1 is labelled high-confidence AI"* is a criterion.
+2. **Score spread:** In each of three trials on ten known AI-generated and ten independently human-written samples matched within 20% word count, the mean combined AI score exceeds the mean human score by at least 0.20.
+   **Why:** A varying number must carry useful separation, rather than merely changing in the last decimal place.
 
-Under each, write a sentence or two on **why that target**. *"I allow at most 1
-false positive in 10 because on a writing site a wrong accusation costs more
-than a missed detection"* is a real answer.
+3. **Label coverage:** Before evaluation, freeze three distinct sample texts in a fixture file. Each must produce its designated label (human, unsure, AI) in all three repeated submissions, and a sweep of 1,001 scores from 0 to 1 must map to exactly one of those labels with boundaries matching the README.
+   **Why:** This checks both end-to-end reachability and complete, unambiguous mapping; synthetic scores alone cannot demonstrate text reachability.
 
-> Missing your own targets next unit costs you nothing. Setting a target so
-> easy you can't miss it does.
+4. **Appeals:** For ten existing content IDs, all ten valid appeals return HTTP 200 and `under_review`, append the exact reasoning and correct creator ID, and preserve the original decision. Ten unknown IDs must return 404 without an appeal event.
+   **Why:** Every writer needs a reliable challenge path, and the audit trail must show what was challenged.
 
----
-
-## Pick numbers you can defend
-
-**Cover at least three of these five areas.** They're prompts, not a form.
-
-| Area | A question it could answer |
-|---|---|
-| False positives | How often may a human's writing get called AI? |
-| Score spread | How far apart should clearly-AI and clearly-human text score? |
-| Label coverage | Is every one of your three labels actually reachable? |
-| The appeal path | Does an appeal always change status and always get recorded? |
-| Bad input | What happens when `text` is missing, empty, or enormous? |
-
-Two things worth knowing before you pick numbers:
-
-- **The expensive mistake is one-sided.** Missing some AI text costs the site a
-  little. Accusing a real writer costs that person a lot. A criterion that
-  treats both errors as equally bad is describing a system nobody would ship.
-- **Unit 8 tests across three trials, and the target has to hold across all
-  three.** Your first signal runs a model, so identical input can score
-  differently twice. A target of "at most 1 in 10" against trials of 2, 1, 2 is
-  a **miss**.
-
----
-## 1.
-
-<!-- Your criterion. It must name a number. -->
-
-
-
-**Why this target:**
-
-
-
----
-
-## 2.
-
-<!-- Your criterion. -->
-
-
-
-**Why this target:**
-
-
-
----
-
-## 3.
-
-<!-- Your criterion. -->
-
-
-
-**Why this target:**
-
-
-
----
-
-## 4.
-
-<!-- Your criterion. -->
-
-
-
-**Why this target:**
-
-
-
----
-
-## 5.
-
-<!-- Your criterion. -->
-
-
-
-**Why this target:**
-
-
-
----
-
-<!-- ─────────────────────────────────────────────────────────────────────────
-     UNIT 8 — read this before you change anything above.
-
-     If a criterion turns out to be BROKEN rather than merely unmet, you can
-     revise it, and that earns credit. But never delete or edit the original
-     line. Add the revision underneath, like this:
-
-         ## 2. Uncertain cases land in the unsure band
-
-         The system handles uncertain cases well.
-
-         **Why this target:** ...
-
-         > **Revised in unit 8:** Text I judged borderline scores between
-         > 0.4 and 0.6 in at least 4 of 5 cases.
-         >
-         > **Why revised:** "well" gave me nothing to check. I couldn't
-         > reach a verdict from it at all.
-
-     That's a revision because the criterion couldn't be MEASURED.
-
-     Lowering a target because you missed it is not a revision, and it costs
-     you the point:
-
-         ✗ "At most 1 of 10 of my own pieces flagged as AI" → "at most 3
-            of 10", because 1 of 10 turned out to be hard.
-
-     A number you missed stays where it is, gets diagnosed, and gets a fix
-     attempted. That's where the points are.
-     ───────────────────────────────────────────────────────────────────────── -->
+5. **Bad input:** Every request in a fixed matrix (malformed JSON, non-object JSON, missing fields, nulls, wrong types, blank text/creator/reasoning, text over 20,000 characters, creator IDs over 200 characters, and reasoning over 5,000 characters) returns a JSON 4xx response, makes zero detector calls, and creates no decision or appeal event. A valid 20,000-character text must pass validation.
+   **Why:** Predictable validation prevents crashes and unnecessary model work; the inclusive size boundary must be explicit.
